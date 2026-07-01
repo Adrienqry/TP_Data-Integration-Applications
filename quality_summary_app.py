@@ -218,52 +218,88 @@ def build_quality_report(tables, anomalies):
     return pd.DataFrame(
         [
             {
-                "Issue": "Conditional fields look almost empty",
-                "Evidence": (
+                "Quality issue": "Conditional fields look almost empty",
+                "What we found": (
                     f"lartpc {percent(business_missing_mask(lieux, 'lartpc').sum(), len(lieux))}%, "
                     f"occutc {percent(veh['occutc'].isna().sum(), len(veh))}%, "
                     f"etatp {percent(business_missing_mask(usa, 'etatp').sum(), len(usa))}%"
                 ),
-                "Impact": "Can make the dataset look worse than it is.",
-                "Action": "Tag these fields as conditional or not applicable.",
+                "Why it matters": (
+                    "These fields are not supposed to be filled for every record. For example, "
+                    "`occutc` only makes sense for public transport and `etatp` only concerns pedestrians."
+                ),
+                "What we do": (
+                    "Keep the fields, but separate real missing values from `Not applicable`. "
+                    "Do not delete rows because of these columns."
+                ),
+                "Expected result": "Completeness KPIs become fair and do not exaggerate data quality problems.",
                 "Priority": "Medium",
             },
             {
-                "Issue": "User profile values are sometimes missing",
-                "Evidence": (
+                "Quality issue": "User profile values are sometimes missing",
+                "What we found": (
                     f"birth year {percent(birth_year.isna().sum(), len(usa))}%, "
                     f"sex unknown {percent(business_missing_mask(usa, 'sexe').sum(), len(usa))}%"
                 ),
-                "Impact": "Can bias age and gender comparisons.",
-                "Action": "Keep rows and create Unknown categories.",
+                "Why it matters": (
+                    "Age and sex are useful to compare risk between user groups. Removing these rows "
+                    "would create biased results."
+                ),
+                "What we do": (
+                    "Compute `age` only when `an_nais` exists, create `age_group`, and use `Unknown` "
+                    "for missing age or sex."
+                ),
+                "Expected result": "User profile analysis remains complete and transparent.",
                 "Priority": "Medium",
             },
             {
-                "Issue": "Unexpected category values",
-                "Evidence": f"{int(anomalies['count'].sum()) if len(anomalies) else 0} records affected",
-                "Impact": "Can break labels, filters, and grouped charts.",
-                "Action": "Map known codes, then flag the rest as Out of dictionary.",
+                "Quality issue": "Unexpected category values",
+                "What we found": f"{int(anomalies['count'].sum()) if len(anomalies) else 0} records affected",
+                "Why it matters": (
+                    "Dashboards need stable category labels. Unknown codes can disappear from charts "
+                    "or break filters if they are not handled."
+                ),
+                "What we do": (
+                    "Map all official codes to labels. Values outside the dictionary are kept but flagged "
+                    "as `Out of dictionary`."
+                ),
+                "Expected result": "All records stay visible and category filters remain reliable.",
                 "Priority": "Medium",
             },
             {
-                "Issue": "Exact duplicates",
-                "Evidence": f"{int(lieux.duplicated().sum())} duplicate rows in lieux",
-                "Impact": "Can slightly overcount road-location records.",
-                "Action": "Remove exact duplicates in Silver.",
+                "Quality issue": "Exact duplicates",
+                "What we found": f"{int(lieux.duplicated().sum())} duplicate rows in lieux",
+                "Why it matters": "Duplicate rows can slightly overcount road-location records.",
+                "What we do": (
+                    "Remove only exact duplicates. We do not remove valid multiple rows when an accident "
+                    "really has several related records."
+                ),
+                "Expected result": "Counts are cleaner without losing legitimate accident information.",
                 "Priority": "Low",
             },
             {
-                "Issue": "Vehicles without matching users",
-                "Evidence": f"{len(vehicle_ids - user_vehicle_ids)} vehicles",
-                "Impact": "Inner joins can silently drop these vehicles.",
-                "Action": "Use controlled joins and document hit-and-run cases.",
+                "Quality issue": "Vehicles without matching users",
+                "What we found": f"{len(vehicle_ids - user_vehicle_ids)} vehicles",
+                "Why it matters": (
+                    "If we use an inner join between vehicles and users, these vehicles disappear. "
+                    "The official documentation explains this can happen for hit-and-run cases."
+                ),
+                "What we do": (
+                    "Use left joins from vehicles, keep these records, and add a quality flag such as "
+                    "`missing_user_record`."
+                ),
+                "Expected result": "Vehicle analysis stays complete and hit-and-run cases are documented.",
                 "Priority": "Medium",
             },
             {
-                "Issue": "Coordinates are valid here",
-                "Evidence": f"{int(invalid_coordinates.sum())} invalid coordinates",
-                "Impact": "Mapping is reliable for this file.",
-                "Action": "Keep this validation as a pipeline check.",
+                "Quality issue": "Coordinates are valid here",
+                "What we found": f"{int(invalid_coordinates.sum())} invalid coordinates",
+                "Why it matters": "Maps depend directly on latitude and longitude quality.",
+                "What we do": (
+                    "Keep the coordinate validation step in the pipeline. If invalid coordinates appear "
+                    "later, fallback to municipality or department."
+                ),
+                "Expected result": "Accident maps are reliable and future data loads remain controlled.",
                 "Priority": "Low",
             },
         ]
@@ -413,8 +449,49 @@ with tab_overview:
 
 with tab_quality:
     st.header("Quality report")
-    st.write("Main issues discovered during profiling.")
-    st.dataframe(quality_report, use_container_width=True, hide_index=True)
+    st.write(
+        "This section explains the main data quality issues found in Part 1. "
+        "For each issue, we show the evidence, why it matters, and the exact action to apply in the Silver layer."
+    )
+
+    priority_order = {"High": 0, "Medium": 1, "Low": 2}
+    quality_report = quality_report.assign(
+        priority_order=quality_report["Priority"].map(priority_order)
+    ).sort_values(["priority_order", "Quality issue"])
+
+    st.subheader("Detailed quality decisions")
+    for _, row in quality_report.drop(columns=["priority_order"]).iterrows():
+        with st.expander(f"{row['Priority']} priority - {row['Quality issue']}", expanded=row["Priority"] == "Medium"):
+            c1, c2 = st.columns([1, 1])
+            with c1:
+                st.markdown("**What we found**")
+                st.write(row["What we found"])
+                st.markdown("**Why it matters**")
+                st.write(row["Why it matters"])
+            with c2:
+                st.markdown("**What we do in the Silver layer**")
+                st.write(row["What we do"])
+                st.markdown("**Expected result**")
+                st.write(row["Expected result"])
+
+    st.subheader("Compact quality report")
+    st.dataframe(
+        quality_report.drop(columns=["priority_order"]),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.subheader("Silver-layer action checklist")
+    st.markdown(
+        """
+- **Standardize** dates, coordinates, identifiers, and category labels.
+- **Keep rows** when age, sex, or conditional fields are missing.
+- **Separate meanings**: `Unknown` is not the same as `Not applicable`.
+- **Flag issues** with quality columns such as `missing_user_record`, `out_of_dictionary`, or `coordinate_valid`.
+- **Remove only exact duplicates**, not valid one-to-many accident records.
+- **Use controlled joins**, especially between vehicles and users.
+"""
+    )
 
     st.subheader("Top missing fields")
     top_missing = missingness.head(15)
